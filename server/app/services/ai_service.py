@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-from openai import AsyncOpenAI, OpenAIError
+from openai import OpenAI, AsyncOpenAI, OpenAIError
 import re
 import asyncio
 from fastapi import HTTPException
@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from app.core.config import settings
 
 # Configure OpenAI
-client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 class AIResponse(BaseModel):
     """Base class for AI responses"""
@@ -34,7 +34,7 @@ async def call_openai_with_retry(messages: List[Dict[str, str]], max_retries: in
     """Make OpenAI API call with retry logic"""
     for attempt in range(max_retries):
         try:
-            response = await client.chat.completions.create(
+            response = client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=messages,
                 temperature=settings.OPENAI_TEMPERATURE,

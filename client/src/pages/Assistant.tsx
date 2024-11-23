@@ -16,29 +16,55 @@ export function Assistant() {
     },
   ]);
   const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || isLoading) return;
 
-    const newMessage: Message = {
+    const userMessage: Message = {
       id: messages.length + 1,
       role: 'user',
       content: input,
     };
 
-    setMessages([...messages, newMessage]);
+    setMessages(prev => [...prev, userMessage]);
     setInput('');
+    setIsLoading(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiResponse: Message = {
+    try {
+      const response = await fetch('http://localhost:8000/api/v1/test/test-openai', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: input }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get AI response');
+      }
+
+      const data = await response.json();
+      
+      const aiMessage: Message = {
         id: messages.length + 2,
         role: 'assistant',
-        content: 'I understand your query. Let me help you with that...',
+        content: data.response || 'Sorry, I encountered an error processing your request.',
       };
-      setMessages((prev) => [...prev, aiResponse]);
-    }, 1000);
+
+      setMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      console.error('Error:', error);
+      const errorMessage: Message = {
+        id: messages.length + 2,
+        role: 'assistant',
+        content: 'Sorry, I encountered an error. Please try again.',
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -77,8 +103,9 @@ export function Assistant() {
               value={input}
               onChange={(e) => setInput(e.currentTarget.value)}
               style={{ flex: 1 }}
+              disabled={isLoading}
             />
-            <Button type="submit">Send</Button>
+            <Button type="submit" loading={isLoading}>Send</Button>
           </div>
         </form>
       </Paper>

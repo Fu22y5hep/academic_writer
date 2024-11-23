@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api import auth, users, documents, collaborations, ai_writing, subscription
+from app.api.api_v1.api import api_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -18,6 +19,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(auth.router, prefix=settings.API_V1_STR, tags=["authentication"])
 app.include_router(users.router, prefix=f"{settings.API_V1_STR}/users", tags=["users"])
 app.include_router(documents.router, prefix=f"{settings.API_V1_STR}/documents", tags=["documents"])
