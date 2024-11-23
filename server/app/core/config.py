@@ -5,7 +5,14 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
-    SECRET_KEY: str = "your-secret-key-here"
+    PROJECT_NAME: str = "Academic Writing Assistant"
+    
+    # Database
+    DATABASE_URL: PostgresDsn
+
+    # JWT
+    SECRET_KEY: str
+    ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
 
@@ -17,35 +24,19 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
 
-    PROJECT_NAME: str = "Academic Writing Assistant"
-    
-    # Database settings
-    POSTGRES_SERVER: str = "localhost"
-    POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "postgres"
-    POSTGRES_DB: str = "academic_writing"
-    SQLALCHEMY_DATABASE_URI: Optional[str] = None
-
-    @validator("SQLALCHEMY_DATABASE_URI", pre=True)
-    def assemble_db_connection(cls, v: Optional[str], values: Dict[str, Any]) -> Any:
-        if isinstance(v, str):
-            return v
-        
-        # Build the PostgreSQL URL
-        postgres_dsn = PostgresDsn.build(
-            scheme="postgresql",
-            username=values.get("POSTGRES_USER"),
-            password=values.get("POSTGRES_PASSWORD"),
-            host=values.get("POSTGRES_SERVER", ""),
-            path=f"/{values.get('POSTGRES_DB', '')}"
-        )
-        return str(postgres_dsn)
-
-    # OpenAI Settings
-    OPENAI_API_KEY: str = ""
+    # OpenAI
+    OPENAI_API_KEY: str
     OPENAI_MODEL: str = "gpt-4"
     OPENAI_MAX_TOKENS: int = 2000
     OPENAI_TEMPERATURE: float = 0.7
+    OPENAI_TIMEOUT: int = 30  # seconds
+
+    # Rate Limiting
+    RATE_LIMIT_WINDOW: int = 3600  # 1 hour in seconds
+    FREE_TIER_RATE_LIMIT: int = 10  # requests per window
+    BASIC_TIER_RATE_LIMIT: int = 50
+    PREMIUM_TIER_RATE_LIMIT: int = 200
+    UNLIMITED_TIER_RATE_LIMIT: int = 1000
 
     class Config:
         case_sensitive = True

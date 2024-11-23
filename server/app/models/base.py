@@ -1,3 +1,4 @@
-from sqlalchemy.ext.declarative import declarative_base
+from app.database import Base
 
-Base = declarative_base()
+# Re-export Base for use in other models
+__all__ = ['Base']

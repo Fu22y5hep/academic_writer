@@ -1,635 +1,696 @@
 from typing import List, Dict, Any, Optional
-import openai
 from pydantic import BaseModel
+from openai import AsyncOpenAI, OpenAIError
 import re
+import asyncio
+from fastapi import HTTPException
 
 from app.core.config import settings
 
 # Configure OpenAI
-openai.api_key = settings.OPENAI_API_KEY
+client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
-class WritingSuggestion(BaseModel):
+class AIResponse(BaseModel):
+    """Base class for AI responses"""
+    success: bool
+    error: Optional[str] = None
+
+class WritingSuggestion(AIResponse):
     original_text: str
     suggestion: str
     explanation: str
-    confidence: float
+    confidence: float = 0.0
 
-class GrammarCheck(BaseModel):
+class GrammarCheck(AIResponse):
     text: str
     corrections: List[Dict[str, Any]]
     improved_text: str
 
-class CitationSuggestion(BaseModel):
+class CitationSuggestion(AIResponse):
     context: str
     suggestions: List[Dict[str, Any]]
+
+async def call_openai_with_retry(messages: List[Dict[str, str]], max_retries: int = 3) -> Dict[str, Any]:
+    """Make OpenAI API call with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            response = await client.chat.completions.create(
+                model=settings.OPENAI_MODEL,
+                messages=messages,
+                temperature=settings.OPENAI_TEMPERATURE,
+                max_tokens=settings.OPENAI_MAX_TOKENS,
+                timeout=settings.OPENAI_TIMEOUT
+            )
+            return response
+        except OpenAIError as e:
+            if attempt == max_retries - 1:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"AI service unavailable: {str(e)}"
+                )
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Internal server error: {str(e)}"
+            )
 
 async def get_writing_suggestions(
     text: str,
     context: Optional[str] = None,
     style: str = "academic"
 ) -> WritingSuggestion:
-    """
-    Get AI-powered writing suggestions for improving the text.
-    """
-    prompt = f"""As an academic writing assistant, analyze and improve the following text.
-    Style: {style}
-    
-    Original text:
-    {text}
-    
-    {f'Context: {context}' if context else ''}
-    
-    Provide specific suggestions to enhance clarity, academic tone, and impact."""
+    """Get AI-powered writing suggestions for improving the text."""
+    try:
+        prompt = f"""As an academic writing assistant, analyze and improve the following text.
+        Style: {style}
+        
+        Original text:
+        {text}
+        
+        {f'Context: {context}' if context else ''}
+        
+        Provide specific suggestions to enhance clarity, academic tone, and impact.
+        Format your response as JSON with the following structure:
+        {{
+            "suggestion": "improved text",
+            "explanation": "detailed explanation of changes",
+            "confidence": float between 0 and 1
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic writing assistant."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-    )
-    
-    suggestion = response.choices[0].message.content
-    
-    return WritingSuggestion(
-        original_text=text,
-        suggestion=suggestion,
-        explanation="AI-generated writing improvement suggestions",
-        confidence=response.choices[0].finish_reason == "stop"
-    )
+        ])
+
+        # Parse response
+        content = response.choices[0].message.content
+        # Extract JSON from response
+        import json
+        result = json.loads(content)
+
+        return WritingSuggestion(
+            success=True,
+            original_text=text,
+            **result
+        )
+
+    except Exception as e:
+        return WritingSuggestion(
+            success=False,
+            error=str(e),
+            original_text=text,
+            suggestion="",
+            explanation="",
+            confidence=0.0
+        )
 
 async def check_grammar_and_style(text: str) -> GrammarCheck:
-    """
-    Check grammar, style, and academic tone.
-    """
-    prompt = """Review the following academic text for grammar, style, and tone.
-    Identify any issues and suggest improvements.
-    
-    Text to review:
-    {text}
-    
-    Provide corrections and improvements in a clear, structured format."""
+    """Check grammar, style, and academic tone."""
+    try:
+        prompt = f"""Analyze the following text for grammar, style, and academic tone.
+        Provide corrections and improvements in JSON format:
+        
+        Text: {text}
+        
+        Format your response as:
+        {{
+            "corrections": [
+                {{"type": "grammar/style/tone", "location": "...", "issue": "...", "suggestion": "..."}}
+            ],
+            "improved_text": "complete corrected text"
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic editor."},
-            {"role": "user", "content": prompt.format(text=text)}
-        ],
-        temperature=0.3,
-    )
-    
-    # Parse the response into structured corrections
-    analysis = response.choices[0].message.content
-    corrections = [
-        {
-            "type": "grammar",
-            "suggestion": analysis,
-            "confidence": response.choices[0].finish_reason == "stop"
-        }
-    ]
-    
-    return GrammarCheck(
-        text=text,
-        corrections=corrections,
-        improved_text=analysis
-    )
+            {"role": "user", "content": prompt}
+        ])
+
+        # Parse response
+        content = response.choices[0].message.content
+        # Extract JSON from response
+        import json
+        result = json.loads(content)
+
+        return GrammarCheck(
+            success=True,
+            text=text,
+            **result
+        )
+
+    except Exception as e:
+        return GrammarCheck(
+            success=False,
+            error=str(e),
+            text=text,
+            corrections=[],
+            improved_text=text
+        )
 
 async def suggest_citations(context: str) -> CitationSuggestion:
-    """
-    Suggest relevant academic citations based on the context.
-    """
-    prompt = """Based on the following academic text, suggest relevant papers or sources
-    that could be cited to strengthen the arguments or provide additional context.
-    
-    Text:
-    {context}
-    
-    Provide suggestions in a structured format with titles, authors, and brief explanations
-    of relevance."""
+    """Suggest relevant academic citations based on the context."""
+    try:
+        prompt = f"""Based on the following context, suggest relevant academic citations.
+        
+        Context:
+        {context}
+        
+        Format your response as JSON:
+        {{
+            "suggestions": [
+                {{
+                    "title": "paper title",
+                    "authors": ["author1", "author2"],
+                    "year": year,
+                    "relevance": "explanation of relevance",
+                    "confidence": float between 0 and 1
+                }}
+            ]
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic researcher."},
-            {"role": "user", "content": prompt.format(context=context)}
-        ],
-        temperature=0.7,
-    )
-    
-    # Parse the response into structured suggestions
-    suggestions = [
-        {
-            "suggestion": response.choices[0].message.content,
-            "confidence": response.choices[0].finish_reason == "stop"
-        }
-    ]
-    
-    return CitationSuggestion(
-        context=context,
-        suggestions=suggestions
-    )
+            {"role": "user", "content": prompt}
+        ])
+
+        # Parse response
+        content = response.choices[0].message.content
+        # Extract JSON from response
+        import json
+        result = json.loads(content)
+
+        return CitationSuggestion(
+            success=True,
+            context=context,
+            **result
+        )
+
+    except Exception as e:
+        return CitationSuggestion(
+            success=False,
+            error=str(e),
+            context=context,
+            suggestions=[]
+        )
 
 async def enhance_academic_tone(text: str) -> str:
-    """
-    Enhance the academic tone of the text while preserving meaning.
-    """
-    prompt = """Enhance the academic tone of the following text while preserving its
-    original meaning. Make it more formal and scholarly, but ensure it remains clear
-    and accessible.
-    
-    Original text:
-    {text}
-    
-    Provide the enhanced version with improved academic tone."""
+    """Enhance the academic tone of the text while preserving meaning."""
+    try:
+        prompt = f"""Enhance the academic tone of this text while preserving its meaning.
+        
+        Text:
+        {text}
+        
+        Format your response as JSON:
+        {{
+            "enhanced_text": "improved text with academic tone",
+            "explanation": "explanation of changes made"
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic writing assistant."},
-            {"role": "user", "content": prompt.format(text=text)}
-        ],
-        temperature=0.5,
-    )
-    
-    return response.choices[0].message.content
+            {"role": "user", "content": prompt}
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return result["enhanced_text"]
+
+    except Exception as e:
+        return text
 
 async def generate_research_questions(topic: str, context: str) -> List[str]:
-    """
-    Generate potential research questions based on a topic and context.
-    """
-    prompt = """Generate thoughtful and academically rigorous research questions based on
-    the following topic and context. Consider different angles, methodologies, and
-    theoretical frameworks.
-    
-    Topic: {topic}
-    Context: {context}
-    
-    Provide a list of potential research questions with brief explanations of their
-    significance."""
+    """Generate research questions based on topic and context."""
+    try:
+        prompt = f"""Generate research questions for the following topic and context.
+        
+        Topic: {topic}
+        Context: {context}
+        
+        Format your response as JSON:
+        {{
+            "questions": [
+                {{"question": "research question", "rationale": "explanation of importance", "methodology": "suggested research method"}}
+            ]
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic researcher."},
-            {"role": "user", "content": prompt.format(topic=topic, context=context)}
-        ],
-        temperature=0.8,
-    )
-    
-    # Parse response into list of questions
-    questions = response.choices[0].message.content.split("\n")
-    return [q.strip() for q in questions if q.strip()]
+            {"role": "user", "content": prompt}
+        ])
 
-async def generate_outline(
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return [q["question"] for q in result["questions"]]
+
+    except Exception as e:
+        return []
+
+async def create_outline(
     topic: str,
-    context: str,
-    outline_type: str = "research_paper"
+    research_type: str = "qualitative",
+    outline_type: str = "detailed"
 ) -> Dict[str, Any]:
-    """
-    Generate a structured outline for academic writing.
-    """
-    outline_templates = {
-        "research_paper": """
-        1. Introduction
-           - Background
-           - Research Problem
-           - Research Questions
-           - Significance
-        2. Literature Review
-           - Theoretical Framework
-           - Current Research
-           - Research Gaps
-        3. Methodology
-           - Research Design
-           - Data Collection
-           - Analysis Methods
-        4. Results
-           - Key Findings
-           - Data Analysis
-        5. Discussion
-           - Interpretation
-           - Implications
-           - Limitations
-        6. Conclusion
-           - Summary
-           - Future Research
-        """,
-        "thesis": """
-        1. Introduction
-           - Research Context
-           - Problem Statement
-           - Research Objectives
-           - Thesis Structure
-        2. Literature Review
-           - Theoretical Background
-           - Critical Analysis
-           - Research Gap
-        3. Methodology
-           - Research Philosophy
-           - Research Approach
-           - Methods and Tools
-           - Data Collection
-        4. Results and Analysis
-           - Data Presentation
-           - Analysis
-           - Key Findings
-        5. Discussion
-           - Theoretical Implications
-           - Practical Implications
-           - Limitations
-        6. Conclusion
-           - Research Summary
-           - Contributions
-           - Future Research
-        """
-    }
+    """Create a research outline based on topic and type."""
+    try:
+        prompt = f"""Create a {outline_type} academic research outline for the following topic.
+        
+        Topic: {topic}
+        Research Type: {research_type}
+        
+        Format your response as JSON:
+        {{
+            "outline": [
+                {{"section": "section name", "subsections": ["subsection 1", "subsection 2"], "key_points": ["point 1", "point 2"], "suggested_content": "brief content description"}}
+            ],
+            "recommendations": ["recommendation 1", "recommendation 2"]
+        }}"""
 
-    prompt = f"""Generate a detailed academic outline for the following topic:
-    Topic: {topic}
-    Context: {context}
-    Type: {outline_type}
-
-    Base Structure:
-    {outline_templates.get(outline_type, outline_templates["research_paper"])}
-
-    Please provide a detailed outline with:
-    1. Clear section headers
-    2. Relevant subsections
-    3. Key points to address
-    4. Suggested content for each section"""
-
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic writing consultant."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-    )
-    
-    return {
-        "outline": response.choices[0].message.content,
-        "outline_type": outline_type,
-        "topic": topic
-    }
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return {
+            "outline": result["outline"],
+            "outline_type": outline_type,
+            "recommendations": result.get("recommendations", [])
+        }
+
+    except Exception as e:
+        return {
+            "outline": [],
+            "outline_type": outline_type,
+            "recommendations": [],
+            "error": str(e)
+        }
 
 async def analyze_literature(text: str) -> Dict[str, Any]:
-    """
-    Analyze literature review content and provide suggestions.
-    """
-    prompt = """Analyze this literature review section and provide:
-    1. Synthesis of key themes
-    2. Identification of research gaps
-    3. Suggestions for additional sources
-    4. Critique of current arguments
-    5. Potential theoretical frameworks
+    """Analyze literature review or research text."""
+    try:
+        prompt = f"""Analyze this academic text and provide insights.
+        
+        Text:
+        {text}
+        
+        Format your response as JSON:
+        {{
+            "key_themes": ["theme 1", "theme 2"],
+            "methodology_analysis": "analysis of methods used",
+            "theoretical_framework": "identified frameworks",
+            "gaps": ["research gap 1", "research gap 2"],
+            "recommendations": ["recommendation 1", "recommendation 2"]
+        }}"""
 
-    Text:
-    {text}"""
-
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic researcher."},
-            {"role": "user", "content": prompt.format(text=text)}
-        ],
-        temperature=0.7,
-    )
-    
-    return {
-        "analysis": response.choices[0].message.content,
-        "text_length": len(text)
-    }
+            {"role": "user", "content": prompt}
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return {
+            "analysis": result,
+            "text_length": len(text)
+        }
+
+    except Exception as e:
+        return {
+            "analysis": {},
+            "text_length": len(text),
+            "error": str(e)
+        }
 
 async def suggest_methodology(
-    research_type: str,
-    research_questions: List[str],
-    context: str
+    research_question: str,
+    research_type: str = "mixed"
 ) -> Dict[str, Any]:
-    """
-    Suggest appropriate research methodologies.
-    """
-    prompt = f"""Based on the following research details, suggest appropriate methodologies:
-    
-    Research Type: {research_type}
-    Research Questions:
-    {chr(10).join(f'- {q}' for q in research_questions)}
-    
-    Context:
-    {context}
-    
-    Please provide:
-    1. Recommended research methods
-    2. Data collection approaches
-    3. Analysis techniques
-    4. Potential limitations
-    5. Alternative approaches
-    6. Sampling strategies
-    7. Validity considerations"""
+    """Suggest research methodology based on research question."""
+    try:
+        prompt = f"""Suggest appropriate research methodology for this research question.
+        
+        Research Question: {research_question}
+        Research Type: {research_type}
+        
+        Format your response as JSON:
+        {{
+            "suggested_methods": [
+                {{"method": "method name", "rationale": "why this method is appropriate", "implementation": "how to implement", "limitations": ["limitation 1", "limitation 2"]}}
+            ],
+            "data_collection": ["technique 1", "technique 2"],
+            "analysis_approaches": ["approach 1", "approach 2"],
+            "validity_considerations": ["consideration 1", "consideration 2"]
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert research methodologist."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-    )
-    
-    return {
-        "methodology_suggestions": response.choices[0].message.content,
-        "research_type": research_type
-    }
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return {
+            "methodology_suggestions": result,
+            "research_type": research_type
+        }
+
+    except Exception as e:
+        return {
+            "methodology_suggestions": {},
+            "research_type": research_type,
+            "error": str(e)
+        }
 
 async def generate_abstract(
     title: str,
     content: Dict[str, str],
     max_words: int = 250
 ) -> str:
-    """
-    Generate an academic abstract from paper content.
-    """
-    prompt = f"""Generate an academic abstract for the following paper:
-    
-    Title: {title}
-    
-    Content:
-    - Introduction: {content.get('introduction', '')}
-    - Methods: {content.get('methods', '')}
-    - Results: {content.get('results', '')}
-    - Conclusion: {content.get('conclusion', '')}
-    
-    Requirements:
-    1. Maximum {max_words} words
-    2. Include research purpose
-    3. Highlight methodology
-    4. Summarize key findings
-    5. State main conclusions
-    6. Follow academic style"""
+    """Generate an academic abstract based on paper content."""
+    try:
+        prompt = f"""Generate an academic abstract for this paper.
+        
+        Title: {title}
+        Content:
+        {json.dumps(content, indent=2)}
+        Max Words: {max_words}
+        
+        Format your response as JSON:
+        {{
+            "abstract": "generated abstract text",
+            "word_count": number,
+            "keywords": ["keyword1", "keyword2"]
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic editor."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.6,
-    )
-    
-    return response.choices[0].message.content
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return result["abstract"]
+
+    except Exception as e:
+        return f"Error generating abstract: {str(e)}"
 
 async def suggest_keywords(
     title: str,
     abstract: str,
+    content: Optional[str] = None,
     num_keywords: int = 5
 ) -> List[str]:
-    """
-    Generate relevant academic keywords.
-    """
-    prompt = f"""Generate {num_keywords} relevant academic keywords for:
-    
-    Title: {title}
-    Abstract: {abstract}
-    
-    Requirements:
-    1. Include broad field terms
-    2. Include specific methodology terms
-    3. Include key concepts
-    4. Consider SEO and discoverability
-    5. Follow academic conventions"""
+    """Generate academic keywords for the paper."""
+    try:
+        prompt = f"""Generate academic keywords for this paper.
+        
+        Title: {title}
+        Abstract: {abstract}
+        Content: {content if content else 'Not provided'}
+        Number of Keywords: {num_keywords}
+        
+        Format your response as JSON:
+        {{
+            "keywords": [
+                {{
+                    "term": "keyword",
+                    "relevance": float between 0 and 1,
+                    "category": "methodology/concept/theory"
+                }}
+            ]
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert in academic publishing."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.6,
-    )
-    
-    keywords = response.choices[0].message.content.split("\n")
-    return [k.strip() for k in keywords if k.strip()]
+        ])
 
-async def format_reference(
-    reference_text: str,
-    style: str = "apa",
-    version: str = "7"
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return [k["term"] for k in sorted(result["keywords"], key=lambda x: x["relevance"], reverse=True)]
+
+    except Exception as e:
+        return []
+
+async def format_citation(
+    citation_text: str,
+    style: str = "apa"
 ) -> str:
-    """
-    Format a reference according to specified citation style.
-    Supports APA, MLA, Chicago, Harvard, and Vancouver styles.
-    """
-    style_guides = {
-        "apa": f"APA {version}th Edition",
-        "mla": f"MLA {version}th Edition",
-        "chicago": f"Chicago Manual of Style {version}th Edition",
-        "harvard": "Harvard Referencing Style",
-        "vancouver": "Vancouver Citation Style"
-    }
+    """Format a citation according to the specified style guide."""
+    try:
+        prompt = f"""Format this citation according to {style.upper()} style.
+        
+        Citation: {citation_text}
+        
+        Format your response as JSON:
+        {{
+            "formatted_citation": "properly formatted citation",
+            "notes": ["formatting note 1", "formatting note 2"]
+        }}"""
 
-    prompt = f"""Format the following reference according to {style_guides.get(style.lower(), "APA 7th Edition")}:
-
-    Reference:
-    {reference_text}
-
-    Please ensure:
-    1. Correct ordering of elements
-    2. Proper punctuation
-    3. Correct capitalization
-    4. Proper formatting of author names
-    5. Accurate date formatting"""
-
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert in academic citation styles."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.3,
-    )
-    
-    return response.choices[0].message.content.strip()
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return result["formatted_citation"]
+
+    except Exception as e:
+        return citation_text
 
 async def check_style_guide(
     text: str,
-    style_guide: str = "apa",
-    elements: List[str] = ["citations", "headings", "numbers", "abbreviations"]
+    style_guide: str = "apa"
 ) -> Dict[str, Any]:
-    """
-    Check text against academic style guide requirements.
-    """
-    prompt = f"""Review the following text for compliance with {style_guide.upper()} style guide,
-    focusing on: {', '.join(elements)}.
-    
-    Text:
-    {text}
-    
-    For each element, provide:
-    1. Style guide rule
-    2. Current usage
-    3. Suggested corrections
-    4. Explanation
-    
-    Format the response as a structured analysis."""
+    """Check text against academic style guide requirements."""
+    try:
+        prompt = f"""Check this text against {style_guide.upper()} style guide requirements.
+        
+        Text: {text}
+        
+        Format your response as JSON:
+        {{
+            "issues": [
+                {{
+                    "type": "formatting/citation/structure",
+                    "location": "description of location",
+                    "issue": "description of issue",
+                    "correction": "suggested correction"
+                }}
+            ],
+            "general_feedback": "overall assessment",
+            "compliance_score": float between 0 and 1
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert in academic style guides."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.5,
-    )
-    
-    return {
-        "analysis": response.choices[0].message.content,
-        "style_guide": style_guide,
-        "elements_checked": elements
-    }
+        ])
 
-async def extract_citations(text: str) -> List[Dict[str, str]]:
-    """
-    Extract and parse citations from text.
-    """
-    prompt = """Extract and analyze all citations from the following text.
-    For each citation, identify:
-    1. Citation type (in-text, parenthetical)
-    2. Authors
-    3. Year
-    4. Page numbers (if present)
-    5. Context of usage
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return {
+            "analysis": result,
+            "style_guide": style_guide
+        }
 
-    Text:
-    {text}"""
+    except Exception as e:
+        return {
+            "analysis": {},
+            "style_guide": style_guide,
+            "error": str(e)
+        }
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+async def analyze_citations(text: str) -> List[Dict[str, Any]]:
+    """Analyze citations in academic text."""
+    try:
+        prompt = f"""Analyze the citations in this academic text.
+        
+        Text: {text}
+        
+        Format your response as JSON:
+        {{
+            "citations": [
+                {{
+                    "text": "cited text",
+                    "source": "source details",
+                    "type": "citation type",
+                    "context": "usage context",
+                    "suggestions": ["improvement 1", "improvement 2"]
+                }}
+            ],
+            "overall_assessment": "assessment of citation usage",
+            "recommendations": ["recommendation 1", "recommendation 2"]
+        }}"""
+
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert in academic citations."},
-            {"role": "user", "content": prompt.format(text=text)}
-        ],
-        temperature=0.3,
-    )
-    
-    # Parse the response into structured citations
-    citations = []
-    citation_text = response.choices[0].message.content
-    
-    # Simple parsing of citation blocks
-    citation_blocks = re.split(r'\n\d+\.\s+', citation_text)
-    for block in citation_blocks[1:]:  # Skip the first empty block
-        citations.append({
-            "text": block.strip(),
-            "extracted": True
-        })
-    
-    return citations
+            {"role": "user", "content": prompt}
+        ])
 
-async def suggest_transitions(
-    paragraphs: List[str]
-) -> List[Dict[str, str]]:
-    """
-    Suggest transition sentences between paragraphs.
-    """
-    suggestions = []
-    
-    for i in range(len(paragraphs) - 1):
-        prompt = f"""Suggest a transition sentence between these two paragraphs:
-        
-        Paragraph 1:
-        {paragraphs[i]}
-        
-        Paragraph 2:
-        {paragraphs[i + 1]}
-        
-        Requirements:
-        1. Maintain academic tone
-        2. Create logical flow
-        3. Highlight relationship between ideas
-        4. Be concise but effective"""
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return result["citations"]
 
-        response = await openai.ChatCompletion.acreate(
-            model="gpt-4",
-            messages=[
+    except Exception as e:
+        return []
+
+async def suggest_transitions(paragraphs: List[str]) -> List[Dict[str, Any]]:
+    """Suggest transitions between paragraphs."""
+    try:
+        suggestions = []
+        for i in range(len(paragraphs) - 1):
+            prompt = f"""Suggest transitions between these academic paragraphs.
+            
+            Paragraph 1:
+            {paragraphs[i]}
+            
+            Paragraph 2:
+            {paragraphs[i + 1]}
+            
+            Format your response as JSON:
+            {{
+                "transition": "suggested transition text",
+                "rationale": "explanation of connection",
+                "alternatives": ["alternative 1", "alternative 2"]
+            }}"""
+
+            response = await call_openai_with_retry([
                 {"role": "system", "content": "You are an expert academic writer."},
                 {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-        )
-        
-        suggestions.append({
-            "before": paragraphs[i],
-            "after": paragraphs[i + 1],
-            "suggestion": response.choices[0].message.content.strip()
-        })
-    
-    return suggestions
+            ])
+
+            content = response.choices[0].message.content
+            result = json.loads(content)
+            suggestions.append({
+                "before": paragraphs[i],
+                "after": paragraphs[i + 1],
+                **result
+            })
+
+        return suggestions
+
+    except Exception as e:
+        return []
 
 async def check_argument_structure(text: str) -> Dict[str, Any]:
-    """
-    Analyze and provide feedback on argument structure.
-    """
-    prompt = """Analyze the argument structure in this text. Provide:
-    1. Main claims identification
-    2. Evidence assessment
-    3. Logical flow analysis
-    4. Counter-argument consideration
-    5. Suggestions for strengthening arguments
-    
-    Text:
-    {text}"""
+    """Analyze and provide feedback on argument structure."""
+    try:
+        prompt = """Analyze the argument structure in this text. Provide:
+        1. Main claims identification
+        2. Evidence assessment
+        3. Logical flow analysis
+        4. Counter-argument consideration
+        5. Suggestions for strengthening arguments
+        
+        Text:
+        {text}
+        
+        Format your response as JSON:
+        {{
+            "analysis": "structured analysis",
+            "suggestions": ["suggestion 1", "suggestion 2"],
+            "strengths": ["strength 1", "strength 2"],
+            "weaknesses": ["weakness 1", "weakness 2"]
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert in academic argumentation."},
             {"role": "user", "content": prompt.format(text=text)}
-        ],
-        temperature=0.6,
-    )
-    
-    return {
-        "analysis": response.choices[0].message.content,
-        "text_length": len(text)
-    }
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return {
+            "analysis": result,
+            "text_length": len(text)
+        }
+
+    except Exception as e:
+        return {
+            "analysis": {},
+            "text_length": len(text),
+            "error": str(e)
+        }
 
 async def suggest_evidence(claim: str, field: str) -> List[Dict[str, str]]:
-    """
-    Suggest types of evidence to support an academic claim.
-    """
-    prompt = f"""For the following academic claim in the field of {field},
-    suggest appropriate types of evidence to support it:
-    
-    Claim: {claim}
-    
-    Please suggest:
-    1. Empirical evidence types
-    2. Theoretical support
-    3. Methodological approaches
-    4. Potential data sources
-    5. Specific examples or cases"""
+    """Suggest types of evidence to support an academic claim."""
+    try:
+        prompt = f"""For the following academic claim in the field of {field},
+        suggest appropriate types of evidence to support it:
+        
+        Claim: {claim}
+        
+        Please suggest:
+        1. Empirical evidence types
+        2. Theoretical support
+        3. Methodological approaches
+        4. Potential data sources
+        5. Specific examples or cases
+        
+        Format your response as JSON:
+        {{
+            "evidence_types": [
+                {{
+                    "type": "evidence type",
+                    "rationale": "explanation of relevance",
+                    "examples": ["example 1", "example 2"]
+                }}
+            ]
+        }}"""
 
-    response = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
+        response = await call_openai_with_retry([
             {"role": "system", "content": "You are an expert academic researcher."},
             {"role": "user", "content": prompt}
-        ],
-        temperature=0.7,
-    )
-    
-    # Parse suggestions into structured format
-    suggestions = []
-    suggestion_text = response.choices[0].message.content
-    
-    # Simple parsing of suggestion blocks
-    suggestion_blocks = re.split(r'\n\d+\.\s+', suggestion_text)
-    for block in suggestion_blocks[1:]:
-        suggestions.append({
-            "evidence_type": block.split(':')[0].strip() if ':' in block else "General",
-            "suggestion": block.split(':')[1].strip() if ':' in block else block.strip()
-        })
-    
-    return suggestions
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return result["evidence_types"]
+
+    except Exception as e:
+        return []
+
+async def extract_citations(text: str) -> List[Dict[str, str]]:
+    """Extract and parse citations from text."""
+    try:
+        prompt = """Extract and analyze all citations from the following text.
+        For each citation, identify:
+        1. Citation type (in-text, parenthetical)
+        2. Authors
+        3. Year
+        4. Page numbers (if present)
+        5. Context of usage
+        
+        Text:
+        {text}
+        
+        Format your response as JSON:
+        {{
+            "citations": [
+                {{
+                    "text": "cited text",
+                    "type": "citation type",
+                    "authors": ["author1", "author2"],
+                    "year": year,
+                    "pages": "page numbers",
+                    "context": "usage context"
+                }}
+            ]
+        }}"""
+
+        response = await call_openai_with_retry([
+            {"role": "system", "content": "You are an expert in academic citations."},
+            {"role": "user", "content": prompt.format(text=text)}
+        ])
+
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        return result["citations"]
+
+    except Exception as e:
+        return []
