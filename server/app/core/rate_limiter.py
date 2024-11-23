@@ -16,6 +16,7 @@ class RateLimiter:
         
         # Token costs for different operations
         self.TOKEN_COSTS = {
+            "/api/v1/generate-outline": 3,
             "/api/v1/ai/suggestions": 2,
             "/api/v1/ai/grammar": 1,
             "/api/v1/ai/citations": 2,
@@ -49,21 +50,20 @@ class RateLimiter:
             return 0
         
         current_time = time.time()
-        return sum(
-            tokens for timestamp, tokens in self._requests[user_id][endpoint]
-            if current_time - timestamp < self.WINDOW_SIZE
-        )
+        total_tokens = 0
+        for timestamp, tokens in self._requests[user_id][endpoint]:
+            if current_time - timestamp < self.WINDOW_SIZE:
+                total_tokens += tokens
+        return total_tokens
 
     def _get_token_cost(self, endpoint: str) -> int:
         """Get token cost for an endpoint."""
         return self.TOKEN_COSTS.get(endpoint, self.DEFAULT_TOKENS)
 
-    def check_rate_limit(self, request: Request, user_id: int) -> None:
-        """
-        Check if the request is within rate limits.
-        Raises HTTPException if rate limit is exceeded.
-        """
+    async def check_rate_limit(self, request: Request, user: Optional[Dict] = None) -> None:
+        """Check if the request is within rate limits."""
         endpoint = request.url.path
+        user_id = user.id if user else 0  # Use 0 for unauthenticated users
         
         # Initialize user's request history if needed
         if user_id not in self._requests:
@@ -74,45 +74,33 @@ class RateLimiter:
         # Clean up old requests
         self._cleanup_old_requests(user_id, endpoint)
 
-        # Calculate tokens needed and used
-        tokens_needed = self._get_token_cost(endpoint)
+        # Calculate tokens used and token cost for this request
         tokens_used = self._get_tokens_used(user_id, endpoint)
+        token_cost = self._get_token_cost(endpoint)
 
         # Check if adding this request would exceed the limit
-        if tokens_used + tokens_needed > self.MAX_TOKENS_PER_HOUR:
-            remaining_time = self._get_reset_time(user_id, endpoint)
+        if tokens_used + token_cost > self.MAX_TOKENS_PER_HOUR:
             raise HTTPException(
                 status_code=429,
-                detail={
-                    "error": "Rate limit exceeded",
-                    "reset_in_seconds": remaining_time,
-                    "tokens_used": tokens_used,
-                    "tokens_limit": self.MAX_TOKENS_PER_HOUR
-                }
+                detail="Rate limit exceeded. Please try again later."
             )
 
-        # Record the request
+        # Record this request
         current_time = time.time()
-        self._requests[user_id][endpoint].append((current_time, tokens_needed))
+        self._requests[user_id][endpoint].append((current_time, token_cost))
 
-    def _get_reset_time(self, user_id: int, endpoint: str) -> int:
-        """Calculate time until rate limit resets."""
-        if not self._requests[user_id][endpoint]:
-            return 0
+    def get_rate_limit_info(self, request: Request, user: Optional[Dict] = None) -> Dict:
+        """Get rate limit information for the user."""
+        endpoint = request.url.path
+        user_id = user.id if user else 0
         
-        oldest_request = min(req[0] for req in self._requests[user_id][endpoint])
-        return int(oldest_request + self.WINDOW_SIZE - time.time())
-
-    def get_rate_limit_info(self, user_id: int, endpoint: str) -> Dict:
-        """Get current rate limit information for a user and endpoint."""
         self._cleanup_old_requests(user_id, endpoint)
         tokens_used = self._get_tokens_used(user_id, endpoint)
-        reset_time = self._get_reset_time(user_id, endpoint)
         
         return {
             "tokens_used": tokens_used,
             "tokens_remaining": self.MAX_TOKENS_PER_HOUR - tokens_used,
-            "reset_in_seconds": reset_time
+            "window_size": self.WINDOW_SIZE
         }
 
 # Global rate limiter instance

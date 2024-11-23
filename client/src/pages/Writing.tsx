@@ -1,5 +1,6 @@
 import { Container, Title, Tabs, Paper, TextInput } from '@mantine/core';
 import { useState } from 'react';
+import { PlanningPanel } from '../components/writing/PlanningPanel';
 
 export function Writing() {
   const [title, setTitle] = useState('');
@@ -19,8 +20,8 @@ export function Writing() {
       <Tabs defaultValue="write">
         <Tabs.List>
           <Tabs.Tab value="write">Write</Tabs.Tab>
+          <Tabs.Tab value="outline">Plan & Outline</Tabs.Tab>
           <Tabs.Tab value="suggestions">AI Suggestions</Tabs.Tab>
-          <Tabs.Tab value="outline">Outline</Tabs.Tab>
         </Tabs.List>
 
         <Paper p="md" mt="sm" withBorder>
@@ -39,12 +40,12 @@ export function Writing() {
             />
           </Tabs.Panel>
 
-          <Tabs.Panel value="suggestions">
-            <p>AI suggestions will appear here as you write...</p>
+          <Tabs.Panel value="outline">
+            <PlanningPanel />
           </Tabs.Panel>
 
-          <Tabs.Panel value="outline">
-            <p>Document outline will be displayed here...</p>
+          <Tabs.Panel value="suggestions">
+            <p>AI suggestions will appear here as you write...</p>
           </Tabs.Panel>
         </Paper>
       </Tabs>

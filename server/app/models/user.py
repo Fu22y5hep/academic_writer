@@ -1,7 +1,8 @@
 from sqlalchemy import Boolean, Column, Integer, String, DateTime, JSON, Enum
 import enum
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 from sqlalchemy.sql import func
+from app.core.security import get_password_hash
 
 from app.models.base import Base
 
@@ -28,10 +29,13 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
-    documents = relationship("Document", back_populates="user")
-    references = relationship("Reference", back_populates="user")
-    document_versions = relationship("DocumentVersion", back_populates="user")
-    collaborations = relationship("DocumentCollaboration", back_populates="user")
-    comments = relationship("Comment", back_populates="user")
-    usage_stats = relationship("UsageStats", back_populates="user")
+    @validates('password')
+    def _validate_password(self, key, password):
+        """Hash password before storing."""
+        return get_password_hash(password)
+
+    def __init__(self, **kwargs):
+        """Initialize user with password hashing."""
+        if 'password' in kwargs:
+            kwargs['hashed_password'] = get_password_hash(kwargs.pop('password'))
+        super().__init__(**kwargs)

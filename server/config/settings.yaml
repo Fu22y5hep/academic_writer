@@ -3,6 +3,9 @@ app:
   version: "1.0.0"
   api_v1_str: "/api/v1"
 
+database:
+  url: "sqlite:///./app.db"
+
 openai:
   models:
     default: "gpt-4o-mini"
@@ -28,6 +31,7 @@ rate_limits:
     unlimited: 1000
 
 security:
+  secret_key: "your-secret-key-here-make-it-very-long-and-random"  # Change this in production!
   algorithm: "HS256"
   access_token_expire_minutes: 11520  # 8 days
 

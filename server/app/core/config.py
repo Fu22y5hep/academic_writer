@@ -3,7 +3,7 @@ import os
 import yaml
 from pathlib import Path
 
-from pydantic import AnyHttpUrl, EmailStr, HttpUrl, PostgresDsn, validator
+from pydantic import AnyHttpUrl, EmailStr, HttpUrl, validator
 from pydantic_settings import BaseSettings
 
 def load_yaml_config():
@@ -27,24 +27,30 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Academic Writing Assistant"
     
     # Database
-    DATABASE_URL: PostgresDsn
+    @property
+    def DATABASE_URL(self) -> str:
+        return self._yaml_config['database']['url']
 
     # JWT
-    SECRET_KEY: str
+    @property
+    def SECRET_KEY(self) -> str:
+        return self._yaml_config['security']['secret_key']
+
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
 
-    @validator("BACKEND_CORS_ORIGINS", pre=True)
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> Union[List[str], str]:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
-        raise ValueError(v)
+    # CORS
+    @property
+    def BACKEND_CORS_ORIGINS(self) -> List[str]:
+        return self._yaml_config['cors']['allowed_origins']
 
     # OpenAI
-    OPENAI_API_KEY: str
+    @property
+    def OPENAI_API_KEY(self) -> str:
+        key = os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        return key
     
     @property
     def OPENAI_MODEL(self) -> str:
@@ -64,32 +70,11 @@ class Settings(BaseSettings):
     
     @property
     def OPENAI_SYSTEM_PROMPT(self) -> str:
-        return self._yaml_config['openai']['settings']['system_prompts']['default']
-
-    # Rate Limiting
-    @property
-    def RATE_LIMIT_WINDOW(self) -> int:
-        return self._yaml_config['rate_limits']['window']
-    
-    @property
-    def FREE_TIER_RATE_LIMIT(self) -> int:
-        return self._yaml_config['rate_limits']['tiers']['free']
-    
-    @property
-    def BASIC_TIER_RATE_LIMIT(self) -> int:
-        return self._yaml_config['rate_limits']['tiers']['basic']
-    
-    @property
-    def PREMIUM_TIER_RATE_LIMIT(self) -> int:
-        return self._yaml_config['rate_limits']['tiers']['premium']
-    
-    @property
-    def UNLIMITED_TIER_RATE_LIMIT(self) -> int:
-        return self._yaml_config['rate_limits']['tiers']['unlimited']
+        return self._yaml_config['openai']['settings']['system_prompts']['writing']
 
     class Config:
+        validate_assignment = True
+        arbitrary_types_allowed = True
         case_sensitive = True
-        env_file = ".env"
-
 
 settings = Settings()

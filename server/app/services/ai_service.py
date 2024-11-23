@@ -3,12 +3,19 @@ from pydantic import BaseModel
 from openai import OpenAI, AsyncOpenAI, OpenAIError
 import re
 import asyncio
+import json
 from fastapi import HTTPException
 
 from app.core.config import settings
 
 # Configure OpenAI
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+try:
+    client = AsyncOpenAI(
+        api_key=settings.OPENAI_API_KEY,
+        timeout=settings.OPENAI_TIMEOUT
+    )
+except Exception as e:
+    raise ValueError(f"Failed to initialize OpenAI client: {str(e)}")
 
 class AIResponse(BaseModel):
     """Base class for AI responses"""
@@ -34,12 +41,12 @@ async def call_openai_with_retry(messages: List[Dict[str, str]], max_retries: in
     """Make OpenAI API call with retry logic"""
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=messages,
                 temperature=settings.OPENAI_TEMPERATURE,
                 max_tokens=settings.OPENAI_MAX_TOKENS,
-                timeout=settings.OPENAI_TIMEOUT
+                response_format={ "type": "json_object" }
             )
             return response
         except OpenAIError as e:
@@ -694,3 +701,70 @@ async def extract_citations(text: str) -> List[Dict[str, str]]:
 
     except Exception as e:
         return []
+
+async def generate_outline(
+    topic: str,
+    essay_type: str,
+    word_count: Optional[int] = None,
+    thesis_statement: Optional[str] = None
+) -> Dict[str, Any]:
+    """Generate an AI-powered essay outline based on topic and type."""
+    
+    prompt = [
+        {"role": "system", "content": settings.OPENAI_SYSTEM_PROMPT},
+        {"role": "user", "content": f"""Create a detailed outline for a {essay_type} essay on the topic: {topic}
+        {'with a target word count of ' + str(word_count) + ' words' if word_count else ''}
+        {'using the thesis statement: ' + thesis_statement if thesis_statement else ''}
+        
+        The outline should include:
+        1. An introduction section with hook and thesis
+        2. Main body sections with key arguments and evidence
+        3. A conclusion section that synthesizes the main points
+        
+        Return a JSON object with this exact structure:
+        {{
+            "sections": [
+                {{
+                    "title": "section title",
+                    "content": "detailed description of what to include",
+                    "subsections": [
+                        {{
+                            "title": "subsection title",
+                            "content": "subsection content",
+                            "subsections": []
+                        }}
+                    ]
+                }}
+            ]
+        }}"""}
+    ]
+
+    try:
+        response = await call_openai_with_retry(prompt)
+        outline_text = response.choices[0].message.content
+        
+        try:
+            outline = json.loads(outline_text)
+            if not isinstance(outline, dict) or "sections" not in outline:
+                raise ValueError("Invalid outline format")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to parse AI response: {str(e)}"
+            )
+        
+        return {
+            "success": True,
+            "outline": outline,
+            "essay_type": essay_type,
+            "topic": topic,
+            "word_count": word_count,
+            "thesis_statement": thesis_statement
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate outline: {str(e)}"
+        )
