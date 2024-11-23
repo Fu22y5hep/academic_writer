@@ -12,13 +12,15 @@ class Document(Base):
     content = Column(Text)
     document_type = Column(String, index=True)  # e.g., "paper", "thesis", "notes"
     metadata = Column(JSON, default={})
+    current_version = Column(Integer, default=1)
     user_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
     user = relationship("User", back_populates="documents")
-    references = relationship("Reference", back_populates="document")
+    references = relationship("Reference", back_populates="document", cascade="all, delete-orphan")
+    versions = relationship("DocumentVersion", back_populates="document", cascade="all, delete-orphan")
 
 class Reference(Base):
     __tablename__ = "references"

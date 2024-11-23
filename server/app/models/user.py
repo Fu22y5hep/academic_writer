@@ -19,3 +19,4 @@ class User(Base):
     # Relationships
     documents = relationship("Document", back_populates="user")
     references = relationship("Reference", back_populates="user")
+    document_versions = relationship("DocumentVersion", back_populates="user")
