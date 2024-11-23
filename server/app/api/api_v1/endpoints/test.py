@@ -19,7 +19,7 @@ async def test_openai_connection(message: Message):
             {"role": "user", "content": message.message}
         ]
         
-        response = await call_openai_with_retry(messages)
+        response = await call_openai_with_retry(messages, json_response=False)
         
         return {
             "status": "success",

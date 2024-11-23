@@ -37,17 +37,25 @@ class CitationSuggestion(AIResponse):
     context: str
     suggestions: List[Dict[str, Any]]
 
-async def call_openai_with_retry(messages: List[Dict[str, str]], max_retries: int = 3) -> Dict[str, Any]:
+async def call_openai_with_retry(
+    messages: List[Dict[str, str]], 
+    max_retries: int = 3,
+    json_response: bool = False
+) -> Dict[str, Any]:
     """Make OpenAI API call with retry logic"""
     for attempt in range(max_retries):
         try:
-            response = await client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=messages,
-                temperature=settings.OPENAI_TEMPERATURE,
-                max_tokens=settings.OPENAI_MAX_TOKENS,
-                response_format={ "type": "json_object" }
-            )
+            params = {
+                "model": settings.OPENAI_MODEL,
+                "messages": messages,
+                "temperature": settings.OPENAI_TEMPERATURE,
+                "max_tokens": settings.OPENAI_MAX_TOKENS,
+            }
+            
+            if json_response:
+                params["response_format"] = {"type": "json_object"}
+            
+            response = await client.chat.completions.create(**params)
             return response
         except OpenAIError as e:
             if attempt == max_retries - 1:
@@ -740,7 +748,7 @@ async def generate_outline(
     ]
 
     try:
-        response = await call_openai_with_retry(prompt)
+        response = await call_openai_with_retry(prompt, json_response=True)
         outline_text = response.choices[0].message.content
         
         try:
