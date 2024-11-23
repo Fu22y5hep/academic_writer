@@ -63,7 +63,7 @@ Leveraging the capabilities of Windsurf ADI, the development process will be acc
 
 - **Frontend:** React.js for web application; React Native for mobile app.
 - **Backend:** Node.js with Express framework.
-- **Database:** MongoDB for scalable data management.
+- **Database:** PostGresQl for scalable data management.
 - **AI Integration:** GPT-4 or later models for language processing.
 - **Version Control:** Git for source code management.
 - **CI/CD Pipeline:** Jenkins or GitHub Actions for continuous integration and deployment.
