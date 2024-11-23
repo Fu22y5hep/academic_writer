@@ -1,6 +1,8 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, JSON
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from ..database import Base
+
+from app.database import Base
 
 class User(Base):
     __tablename__ = "users"
@@ -10,5 +12,10 @@ class User(Base):
     hashed_password = Column(String)
     full_name = Column(String)
     is_active = Column(Boolean, default=True)
+    preferences = Column(JSON, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Relationships
+    documents = relationship("Document", back_populates="user")
+    references = relationship("Reference", back_populates="user")
