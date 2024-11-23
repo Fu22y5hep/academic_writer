@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from app.database import Base
+from app.models.base import Base
 
 class Document(Base):
     __tablename__ = "documents"
@@ -11,7 +11,7 @@ class Document(Base):
     title = Column(String, index=True)
     content = Column(Text)
     document_type = Column(String, index=True)  # e.g., "paper", "thesis", "notes"
-    metadata = Column(JSON, default={})
+    document_metadata = Column(JSON, default={})
     current_version = Column(Integer, default=1)
     user_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -21,6 +21,8 @@ class Document(Base):
     user = relationship("User", back_populates="documents")
     references = relationship("Reference", back_populates="document", cascade="all, delete-orphan")
     versions = relationship("DocumentVersion", back_populates="document", cascade="all, delete-orphan")
+    collaborators = relationship("DocumentCollaboration", back_populates="document", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="document", cascade="all, delete-orphan")
 
 class Reference(Base):
     __tablename__ = "references"
@@ -31,7 +33,7 @@ class Reference(Base):
     authors = Column(JSON)  # List of authors
     year = Column(Integer)
     source = Column(String)  # e.g., "journal", "conference", "book"
-    metadata = Column(JSON, default={})
+    reference_metadata = Column(JSON, default={})
     document_id = Column(Integer, ForeignKey("documents.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())

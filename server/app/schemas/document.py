@@ -1,55 +1,66 @@
+from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
 
-class ReferenceBase(BaseModel):
-    citation_key: str
+class DocumentBase(BaseModel):
+    """Base document schema with shared attributes."""
     title: str
-    authors: List[str]
-    year: int
-    source: str
-    metadata: Dict[str, Any] = {}
+    content: Optional[str] = None
+    document_type: str
+    document_metadata: Dict[str, Any] = {}
 
-class ReferenceCreate(ReferenceBase):
+class DocumentCreate(DocumentBase):
+    """Schema for creating a new document."""
     pass
 
-class ReferenceUpdate(ReferenceBase):
-    citation_key: Optional[str] = None
+class DocumentUpdate(BaseModel):
+    """Schema for updating a document."""
     title: Optional[str] = None
-    authors: Optional[List[str]] = None
-    year: Optional[int] = None
-    source: Optional[str] = None
+    content: Optional[str] = None
+    document_type: Optional[str] = None
+    document_metadata: Optional[Dict[str, Any]] = None
+    current_version: Optional[int] = None
 
-class Reference(ReferenceBase):
+class Document(DocumentBase):
+    """Schema for document responses."""
     id: int
-    document_id: int
     user_id: int
+    current_version: int
     created_at: datetime
     updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
 
-class DocumentBase(BaseModel):
+class ReferenceBase(BaseModel):
+    """Base reference schema with shared attributes."""
+    citation_key: str
     title: str
-    content: str
-    document_type: str
-    metadata: Dict[str, Any] = {}
+    authors: List[str]
+    year: int
+    source: str
+    reference_metadata: Dict[str, Any] = {}
 
-class DocumentCreate(DocumentBase):
-    pass
+class ReferenceCreate(ReferenceBase):
+    """Schema for creating a new reference."""
+    document_id: int
 
-class DocumentUpdate(DocumentBase):
+class ReferenceUpdate(BaseModel):
+    """Schema for updating a reference."""
+    citation_key: Optional[str] = None
     title: Optional[str] = None
-    content: Optional[str] = None
-    document_type: Optional[str] = None
+    authors: Optional[List[str]] = None
+    year: Optional[int] = None
+    source: Optional[str] = None
+    reference_metadata: Optional[Dict[str, Any]] = None
 
-class Document(DocumentBase):
+class Reference(ReferenceBase):
+    """Schema for reference responses."""
     id: int
+    document_id: int
     user_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
-    references: List[Reference] = []
 
     class Config:
         from_attributes = True

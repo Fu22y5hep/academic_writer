@@ -2,19 +2,19 @@ from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from app.database import Base
+from app.models.base import Base
 
 class DocumentVersion(Base):
     __tablename__ = "document_versions"
 
     id = Column(Integer, primary_key=True, index=True)
-    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"))
+    version_number = Column(Integer)
+    title = Column(String)
     content = Column(Text)
-    version_num = Column(Integer)
-    commit_message = Column(String)
-    metadata = Column(JSON, default={})
+    version_metadata = Column(JSON, default={})
+    document_id = Column(Integer, ForeignKey("documents.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    created_by = Column(Integer, ForeignKey("users.id"))
 
     # Relationships
     document = relationship("Document", back_populates="versions")
